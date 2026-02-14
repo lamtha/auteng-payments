@@ -1,1 +1,1 @@
-npx eas-cli@latest build --profile development --platform ios
+npx expo run:ios
