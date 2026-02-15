@@ -1,6 +1,6 @@
 # AutEng Payments — Mobile App (Expo / React Native)
 
-The mobile app from docs/v5/VISION.md
+The mobile app from docs/v5/VISION.md — see also [UI-DESIGN.md](./UI-DESIGN.md) for component library and theming decisions.
 
 
 This project is an Expo (React Native) app with a workflow optimized for:
