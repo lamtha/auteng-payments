@@ -318,3 +318,73 @@ __tests__/app/sign-in.test.tsx                 — Deleted
 - Pairing is single-step for now (enter code → agent paired with default caps). Full two-step flow with cap configuration deferred to Phase 6
 - `AgentAccount.owner` FK kept for future web dashboard use. Mobile auth uses `device_session` exclusively
 - `mobile_auth_views.py` code kept but URL route removed — can be fully deleted once Phase 6 confirms no fallback needed
+
+---
+
+## Phase 2.5 Polish: Model Cleanup, Tab Removal, Paste Support, 401 Handling (2026-02-16)
+
+**Goal**: Post-implementation cleanup — align models with new auth architecture, strip deferred UI, improve pairing UX, handle stale tokens.
+
+### Completed
+
+**Backend — Model cleanup:**
+- Removed `AWAITING_PAYMENT` from `PaymentRequestStatus` — no intermediate state in the new flow (Apple Pay payment IS the approval)
+- Changed `PaymentRequest.decided_by` FK from `AUTH_USER_MODEL` → `DeviceSession` — decisions come from paired devices, not Django users
+- Added index on `['device_session', 'is_active']` for `AgentAccount` — matches the mobile query path
+- Updated `AgentAccount.__str__` — shows device UUID when paired via device session
+- Migration `0161_cleanup_payment_models`
+
+**Backend — Integration test helper:**
+- Created `seed_payment_flow` management command — creates agent with pairing code + API key, waits for manual pairing in simulator, creates a payment request, prints curl commands for further testing
+
+**Mobile — Removed History & Agents tabs:**
+- Deleted `app/(tabs)/history.tsx` and `app/(tabs)/agents.tsx` (placeholder screens deferred to later milestone)
+- Updated `app/(tabs)/_layout.tsx` — single Pending screen, tab bar hidden
+
+**Mobile — Paste support on pairing screen:**
+- Refactored `app/pair-agent.tsx` from 6 individual TextInputs to a single hidden TextInput behind visual digit boxes
+- Pasting a 6-digit code now works natively
+- Added `textContentType="oneTimeCode"` for iOS clipboard suggestions
+- Active digit box gets tint-colored border as cursor indicator
+
+**Mobile — 401 stale token handling:**
+- Added `setOnUnauthorized` callback to `services/api.ts` — fires on 401 responses
+- Wired in `hooks/use-device.ts` — 401 triggers `clearDeviceToken()` + `setIsPaired(false)`
+- App self-heals when stored device token is invalid (e.g. DB rows deleted) — redirects to pairing screen instead of looping on 401
+
+**Tests (40 mobile):**
+- 6 pair-agent screen tests (was 4 — added paste + typing tests)
+- 7 API client tests (was 5 — added 401 handler tests)
+- Remaining 27 unchanged
+
+### Verified
+
+- All 34 backend tests pass
+- All 40 mobile tests pass: `cd payments && npx jest`
+- Manual: seed_payment_flow → pair in simulator → payment request visible in pending list
+- Manual: delete app + DB rows → reinstall → app detects stale token → redirects to pairing
+
+### Files
+
+```
+# Backend — Edited
+be/auteng/models/payment_models.py             — Removed AWAITING_PAYMENT, changed decided_by FK, added device_session index
+be/auteng/migrations/0161_cleanup_payment_models.py — Migration for model cleanup
+
+# Backend — New
+be/auteng/management/commands/seed_payment_flow.py — Integration test helper for simulator testing
+
+# Mobile — Edited
+app/(tabs)/_layout.tsx                         — Single Pending screen, tab bar hidden
+app/pair-agent.tsx                             — Refactored to hidden input + visual boxes (paste support)
+services/api.ts                                — Added setOnUnauthorized callback, 401 detection
+hooks/use-device.ts                            — Wired 401 → clearDeviceToken + unpair
+
+# Mobile — Edited (tests)
+__tests__/app/pair-agent.test.tsx              — Updated for hidden input, added paste/typing tests (6 tests)
+services/api.test.ts                           — Added 401 handler tests (7 tests)
+
+# Mobile — Deleted
+app/(tabs)/history.tsx                         — Deferred to later milestone
+app/(tabs)/agents.tsx                          — Deferred to later milestone
+```
