@@ -6,6 +6,7 @@ interface RequestOptions extends RequestInit {
 }
 
 let accessToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
 
 /** Set the access token (device token) used for authenticated requests. */
 export function setAccessToken(token: string | null) {
@@ -15,6 +16,11 @@ export function setAccessToken(token: string | null) {
 /** Get the current access token. */
 export function getAccessToken(): string | null {
   return accessToken;
+}
+
+/** Register a callback invoked when the server returns 401. */
+export function setOnUnauthorized(handler: (() => void) | null) {
+  onUnauthorized = handler;
 }
 
 /**
@@ -39,6 +45,9 @@ export async function api<T = unknown>(path: string, options: RequestOptions = {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && onUnauthorized) {
+      onUnauthorized();
+    }
     const body = await response.text();
     throw new Error(`${response.status}: ${body}`);
   }

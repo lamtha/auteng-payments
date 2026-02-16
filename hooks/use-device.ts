@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import { setOnUnauthorized } from '@/services/api';
 import {
   clearDeviceToken,
   pairAgent,
@@ -35,8 +36,18 @@ export function useDevice(): DeviceState {
       }
     }
     restore();
+
+    // If the server rejects our stored token (401), clear it and go back to pairing
+    setOnUnauthorized(() => {
+      if (mounted) {
+        clearDeviceToken();
+        setIsPaired(false);
+      }
+    });
+
     return () => {
       mounted = false;
+      setOnUnauthorized(null);
     };
   }, []);
 

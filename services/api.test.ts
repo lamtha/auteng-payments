@@ -1,7 +1,7 @@
 /**
  * Tests for services/api.ts — simplified API client (device token auth, no refresh).
  */
-import { api, setAccessToken } from '@/services/api';
+import { api, setAccessToken, setOnUnauthorized } from '@/services/api';
 
 // Mock config
 jest.mock('@/services/config', () => ({
@@ -24,6 +24,7 @@ function jsonResponse(data: any, statusCode = 200) {
 beforeEach(() => {
   jest.clearAllMocks();
   setAccessToken(null);
+  setOnUnauthorized(null);
 });
 
 describe('api', () => {
@@ -74,5 +75,20 @@ describe('api', () => {
 
     await expect(api('/api/test/')).rejects.toThrow('500');
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('401 calls onUnauthorized handler', async () => {
+    const handler = jest.fn();
+    setOnUnauthorized(handler);
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Unauthorized' }, 401));
+
+    await expect(api('/api/test/')).rejects.toThrow('401');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  test('401 without handler does not throw extra error', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Unauthorized' }, 401));
+
+    await expect(api('/api/test/')).rejects.toThrow('401');
   });
 });
