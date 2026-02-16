@@ -202,3 +202,26 @@ app/(tabs)/index.tsx                             — Pending screen with FlatLis
 - Idempotency: duplicate `idempotency_key` returns the existing PaymentRequest instead of creating a new one
 - Card countdown timer updates every 30 seconds; shows danger color when < 5 minutes remain
 - To test end-to-end: `PROCESS_NAME=backend python manage.py create_test_payment_agent --owner-email <email>`, then curl POST to create a request, then open app to see it in the Pending tab
+
+---
+
+## Architecture Revision: Auth Removal + Payment-as-Approval (2026-02-16)
+
+**Goal**: Simplify auth and approval model based on security analysis of the v5 threat model.
+
+### Changes (docs only — code changes in Phase 2.5)
+
+**Auth removal:**
+- Removed Apple/Google Sign-In as a requirement. The pairing code is the identity binding, Apple Pay biometric is the security gate.
+- Rationale: the agent has email access + browser automation, but cannot trigger Apple Pay on the owner's physical device. Even if an attacker intercepts the pairing code, they can only spend their own money. Full analysis in `docs/v5/VISION.md#authentication-strategy`.
+
+**Payment-as-approval:**
+- Removed separate "approve" step. The Apple Pay payment IS the approval — no `POST /approve/`, just `POST /pay/`.
+- Removed `POST /finalize/` endpoint. Card issuance is now triggered by `payment_intent.succeeded` Stripe webhook, not a client callback. More secure (backend never trusts mobile client).
+- Removed `AWAITING_PAYMENT` status from PaymentRequest.
+
+**Documents updated:**
+- `docs/v5/VISION.md` — Added Authentication Strategy section, updated core flow and roadmap
+- `docs/v5/MVP_ARCH.md` — Updated auth strategy, API endpoints, sequence diagrams, code examples
+- `docs/v5/MVP_MOBILE.md` — Replaced auth section, updated pay flow, tech stack, file layout
+- `docs/v5/MVP_MOBILE_PLAN.md` — Added Phase 2.5, marked Phase 1 as superseded, updated Phase 4 and dependency graph
