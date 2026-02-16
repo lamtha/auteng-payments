@@ -54,3 +54,79 @@ package.json                      — Removed reset-project script
 - Removed React template assets (partial-react-logo.png, react-logo*.png)
 - Color theme: blue tint (`#0F62FE` light / `#78A9FF` dark), semantic colors (success, danger, warning, border, secondary text/background)
 - API client stores access token in-memory via `setAccessToken()` — will be wired to SecureStore in Phase 1
+
+---
+
+## Phase 1: Auth Vertical Slice (2026-02-15)
+
+**Goal**: Sign in on phone, make authenticated API calls to the real backend.
+
+### Completed
+
+**Backend:**
+- Created `POST /api/auth/mobile/` endpoint verifying native Apple/Google `id_token`s
+- Apple verification: fetches JWKS from Apple, verifies RS256 JWT signature, checks iss/aud/exp claims
+- Google verification: uses `google.oauth2.id_token.verify_oauth2_token`
+- Get-or-create User by email, optional `full_name` on first Apple sign-in
+- Returns standard auth response: `{ auth_token, refresh_token, user, source, is_new_user }`
+- Added `APPLE_BUNDLE_ID` and `GOOGLE_MOBILE_CLIENT_ID` to Django settings (env vars)
+- Added `cryptography` to `requirements-base.txt` for RS256 JWT verification
+
+**Mobile:**
+- Installed `expo-apple-authentication` and `expo-secure-store`
+- Created auth types (`AuthUser`, `AuthTokens`, `AuthResponse`, `RefreshResponse`)
+- Created auth service: `signInWithApple()`, `refreshAccessToken()`, `restoreSession()`, `storeTokens()`, `clearTokens()`
+- Refresh token persisted in SecureStore, access token in memory
+- Created `useAuth` hook with `isAuthenticated`, `isLoading`, `user`, `signIn`, `signOut`
+- Created `AuthProvider` context wrapping entire app tree
+- Created sign-in screen with AutEng branding and native Apple Sign-In button
+- Updated root layout with gated navigation (authenticated → tabs, unauthenticated → sign-in)
+- Added 401 automatic retry with token refresh to `api.ts` (callback pattern to avoid circular deps)
+- Set up Jest with `jest-expo` preset and global mocks
+
+**Tests (49 total):**
+- Backend: 22 tests (7 Apple verification, 3 Google verification, 5 request validation, 5 response shape, 2 integration)
+- Mobile: 27 tests (13 auth service, 4 API 401 retry, 6 auth hook, 4 sign-in screen)
+
+### Verified
+
+- All 22 backend tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_mobile_auth.py -v`
+- All 27 mobile tests pass: `cd payments && npx jest`
+
+### Files
+
+```
+# Backend
+be/auteng/view/mobile_auth_views.py  — Mobile auth endpoint (Apple + Google)
+be/auteng/urls.py                    — Added mobile_auth route
+be/auteng/tests/test_mobile_auth.py  — 22 backend auth tests
+be/requirements-base.txt             — Added cryptography
+be/llabs/settings/core.py            — Added APPLE_BUNDLE_ID, GOOGLE_MOBILE_CLIENT_ID
+
+# Mobile — New
+types/auth.ts                        — Auth type definitions
+services/auth.ts                     — Auth service (Apple Sign-In, token storage)
+services/auth.test.ts                — 13 auth service tests
+services/api.test.ts                 — 4 API 401 retry tests
+hooks/use-auth.ts                    — Auth state hook
+hooks/use-auth.test.ts               — 6 auth hook tests
+contexts/auth-context.tsx            — Auth context provider
+app/sign-in.tsx                      — Sign-in screen
+app/sign-in.test.tsx                 — 4 sign-in screen tests
+jest-setup.ts                        — Global test mocks
+
+# Mobile — Edited
+app/_layout.tsx                      — AuthProvider + gated navigation
+services/api.ts                      — 401 retry with token refresh
+app.json                             — Added expo-apple-authentication plugin
+.env.example                         — Documented Apple Sign-In config
+package.json                         — Added test deps + jest config
+```
+
+### Notes
+
+- Used callback registration pattern (`setAuthHandlers`) to break circular dependency between `api.ts` and `auth.ts`
+- Apple Sign-In uses the native system UI via `expo-apple-authentication` — no client secrets needed
+- Test mocking strategy: mock Apple JWKS fetch + Google `verify_oauth2_token` at function level; generate real JWTs with test RSA keys for Apple tests
+- Jest 29 required (not 30) for compatibility with `jest-expo`
+- `--legacy-peer-deps` needed for npm install due to React 19 peer dep conflicts
