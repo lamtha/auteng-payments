@@ -130,3 +130,75 @@ package.json                         — Added test deps + jest config
 - Test mocking strategy: mock Apple JWKS fetch + Google `verify_oauth2_token` at function level; generate real JWTs with test RSA keys for Apple tests
 - Jest 29 required (not 30) for compatibility with `jest-expo`
 - `--legacy-peer-deps` needed for npm install due to React 19 peer dep conflicts
+
+---
+
+## Phase 2: Pending Requests Vertical Slice (2026-02-15)
+
+**Goal**: See a payment request on the Pending screen, created via the agent API.
+
+### Completed
+
+**Backend:**
+- Created `AgentAccount` model (owner FK, agent_name, api_key_hash, caps, pairing fields)
+- Created `PaymentRequest` model (agent_account FK, amount, merchant, status, timestamps)
+- Both models use auto-incrementing integer PK with separate UUID field for API layer privacy
+- Created `AgentAPIKeyAuthentication` class — `ak_` prefix distinguishes agent keys from JWT tokens, SHA-256 hash lookup, validates active + paired
+- Created `POST /api/payments/` — agent creates purchase request (API key auth), validates required fields, enforces per-request and total spend caps, supports idempotency keys
+- Created `GET /api/payments/pending/` — owner lists their pending requests (JWT auth)
+- Created Django admin with "Generate API key" action for AgentAccount
+- Created `create_test_payment_agent` management command to seed test agent with API key
+- Migration `0159_payment_models` applied
+
+**Mobile:**
+- Created `PaymentRequest` and `LineItem` type definitions
+- Created `usePendingRequests` hook — fetches on mount, exposes refresh for pull-to-refresh, loading/error states
+- Created `PaymentRequestCard` component — displays formatted amount, merchant name/domain, purpose, countdown timer (updates every 30s, danger color when < 5 min), agent name badge
+- Updated Pending screen with FlatList, RefreshControl pull-to-refresh, empty/loading/error states with retry button
+
+**Tests (33 total):**
+- Backend: 21 tests (3 model, 6 auth, 7 create request, 5 pending list)
+- Mobile: 12 tests (4 hook, 8 card component)
+
+### Verified
+
+- All 21 backend tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_payments.py -v`
+- All 12 mobile tests pass: `cd payments && npx jest hooks/use-pending-requests.test.ts components/payment-request-card.test.tsx`
+
+### Files
+
+```
+# Backend — New
+be/auteng/models/payment_models.py              — AgentAccount + PaymentRequest models
+be/auteng/auth/__init__.py                       — Auth package init
+be/auteng/auth/agent_auth.py                     — AgentAPIKeyAuthentication class
+be/auteng/view/payments_views.py                 — POST /api/payments/, GET /api/payments/pending/
+be/auteng/admin/payment_admin.py                 — Admin config with API key generation action
+be/auteng/management/commands/create_test_payment_agent.py — Seed test agent command
+be/auteng/tests/test_payments.py                 — 21 backend tests
+be/auteng/migrations/0159_payment_models.py      — Migration
+
+# Backend — Edited
+be/auteng/models/__init__.py                     — Registered AgentAccount, PaymentRequest, PaymentRequestStatus
+be/auteng/urls.py                                — Added /api/payments/ and /api/payments/pending/ routes
+be/auteng/admin/__init__.py                      — Imported payment_admin
+
+# Mobile — New
+types/payment.ts                                 — PaymentRequest + LineItem types
+hooks/use-pending-requests.ts                    — Pending requests data hook
+hooks/use-pending-requests.test.ts               — 4 hook tests
+components/payment-request-card.tsx              — Payment request card component
+components/payment-request-card.test.tsx          — 8 card component tests
+
+# Mobile — Edited
+app/(tabs)/index.tsx                             — Pending screen with FlatList + pull-to-refresh
+```
+
+### Notes
+
+- Agent API keys use `ak_` prefix (e.g. `ak_abc123...`) to distinguish from JWT tokens — `AgentAPIKeyAuthentication` returns `None` for non-prefixed tokens, allowing DRF to fall through to JWT auth
+- Models use `BigAutoField` PK + separate `uuid` field; API responses expose UUID, never the integer PK
+- Cap enforcement: per-request cap (`max_per_request_minor`) and total spend cap (`max_total_spend_minor`) checked before creating PaymentRequest
+- Idempotency: duplicate `idempotency_key` returns the existing PaymentRequest instead of creating a new one
+- Card countdown timer updates every 30 seconds; shows danger color when < 5 minutes remain
+- To test end-to-end: `PROCESS_NAME=backend python manage.py create_test_payment_agent --owner-email <email>`, then curl POST to create a request, then open app to see it in the Pending tab
