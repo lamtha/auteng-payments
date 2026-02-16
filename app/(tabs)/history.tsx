@@ -3,12 +3,12 @@ import { StyleSheet } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 
-export default function PendingScreen() {
+export default function HistoryScreen() {
   return (
     <ThemedView style={styles.container}>
-      <ThemedText type="subtitle">No pending requests</ThemedText>
+      <ThemedText type="subtitle">No history yet</ThemedText>
       <ThemedText style={styles.hint}>
-        Payment requests from your agents will appear here.
+        Past payment requests and their outcomes will appear here.
       </ThemedText>
     </ThemedView>
   );
