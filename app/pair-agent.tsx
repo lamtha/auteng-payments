@@ -1,18 +1,16 @@
 /**
- * Pair Agent screen — shown when no device token exists (first launch)
- * or navigated to from the Agents tab.
+ * Pair Agent screen — shown when no device token exists (first launch).
  *
  * The user enters a 6-digit pairing code provided by the agent.
+ * Supports typing digit-by-digit and pasting the full code.
  */
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
-  NativeSyntheticEvent,
   Pressable,
   StyleSheet,
   TextInput,
-  TextInputKeyPressEventData,
   View,
 } from 'react-native';
 
@@ -27,16 +25,16 @@ const CODE_LENGTH = 6;
 export default function PairAgentScreen() {
   const { pair } = useDeviceContext();
   const colorScheme = useColorScheme() ?? 'light';
-  const [digits, setDigits] = useState<string[]>(Array(CODE_LENGTH).fill(''));
+  const [code, setCode] = useState('');
   const [isPairing, setIsPairing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRefs = useRef<(TextInput | null)[]>([]);
+  const inputRef = useRef<TextInput | null>(null);
 
-  async function handleSubmit(code: string) {
+  async function handleSubmit(value: string) {
     setError(null);
     setIsPairing(true);
     try {
-      await pair(code);
+      await pair(value);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Pairing failed. Please try again.');
     } finally {
@@ -44,39 +42,18 @@ export default function PairAgentScreen() {
     }
   }
 
-  function handleDigitChange(index: number, value: string) {
-    // Only accept single digits
-    const digit = value.replace(/[^0-9]/g, '').slice(-1);
-    const newDigits = [...digits];
-    newDigits[index] = digit;
-    setDigits(newDigits);
+  function handleChangeText(value: string) {
+    const cleaned = value.replace(/[^0-9]/g, '').slice(0, CODE_LENGTH);
+    setCode(cleaned);
 
-    if (digit && index < CODE_LENGTH - 1) {
-      // Move focus to next input
-      inputRefs.current[index + 1]?.focus();
-    }
-
-    // Auto-submit when all digits entered
-    if (digit && index === CODE_LENGTH - 1) {
-      const code = newDigits.join('');
-      if (code.length === CODE_LENGTH) {
-        Keyboard.dismiss();
-        handleSubmit(code);
-      }
-    }
-  }
-
-  function handleKeyPress(index: number, e: NativeSyntheticEvent<TextInputKeyPressEventData>) {
-    if (e.nativeEvent.key === 'Backspace' && !digits[index] && index > 0) {
-      // Move focus to previous input on backspace when current is empty
-      const newDigits = [...digits];
-      newDigits[index - 1] = '';
-      setDigits(newDigits);
-      inputRefs.current[index - 1]?.focus();
+    if (cleaned.length === CODE_LENGTH) {
+      Keyboard.dismiss();
+      handleSubmit(cleaned);
     }
   }
 
   const colors = Colors[colorScheme];
+  const digits = code.split('');
 
   return (
     <ThemedView style={styles.container}>
@@ -92,30 +69,49 @@ export default function PairAgentScreen() {
           Enter the 6-digit pairing code from your agent
         </ThemedText>
 
-        <View style={styles.codeRow} testID="code-input">
-          {digits.map((digit, index) => (
-            <TextInput
+        <Pressable
+          style={styles.codeRow}
+          testID="code-input"
+          onPress={() => inputRef.current?.focus()}
+        >
+          {Array.from({ length: CODE_LENGTH }, (_, index) => (
+            <View
               key={index}
-              ref={(ref) => { inputRefs.current[index] = ref; }}
               style={[
-                styles.digitInput,
+                styles.digitBox,
                 {
-                  color: colors.text,
-                  borderColor: error ? colors.danger : colors.border,
+                  borderColor:
+                    error
+                      ? colors.danger
+                      : index === digits.length
+                        ? colors.tint
+                        : colors.border,
                   backgroundColor: colors.backgroundSecondary,
                 },
               ]}
-              value={digit}
-              onChangeText={(v) => handleDigitChange(index, v)}
-              onKeyPress={(e) => handleKeyPress(index, e)}
-              keyboardType="number-pad"
-              maxLength={1}
-              selectTextOnFocus
-              editable={!isPairing}
               testID={`digit-${index}`}
-            />
+            >
+              <ThemedText style={styles.digitText}>
+                {digits[index] ?? ''}
+              </ThemedText>
+            </View>
           ))}
-        </View>
+
+          {/* Hidden input captures keyboard + paste */}
+          <TextInput
+            ref={inputRef}
+            style={styles.hiddenInput}
+            value={code}
+            onChangeText={handleChangeText}
+            keyboardType="number-pad"
+            maxLength={CODE_LENGTH}
+            autoFocus
+            editable={!isPairing}
+            testID="hidden-input"
+            autoComplete="one-time-code"
+            textContentType="oneTimeCode"
+          />
+        </Pressable>
 
         {isPairing ? (
           <ActivityIndicator
@@ -137,8 +133,8 @@ export default function PairAgentScreen() {
             <Pressable
               onPress={() => {
                 setError(null);
-                setDigits(Array(CODE_LENGTH).fill(''));
-                inputRefs.current[0]?.focus();
+                setCode('');
+                inputRef.current?.focus();
               }}
               testID="retry-button"
             >
@@ -188,14 +184,23 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 24,
   },
-  digitInput: {
+  digitBox: {
     width: 48,
     height: 56,
     borderWidth: 2,
     borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  digitText: {
     fontSize: 24,
     fontWeight: '600',
-    textAlign: 'center',
+  },
+  hiddenInput: {
+    position: 'absolute',
+    opacity: 0,
+    width: '100%',
+    height: '100%',
   },
   spinner: {
     marginTop: 8,
