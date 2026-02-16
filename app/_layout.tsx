@@ -1,6 +1,7 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
@@ -12,6 +13,20 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuthContext();
   const colorScheme = useColorScheme() ?? 'light';
+  const router = useRouter();
+  const segments = useSegments();
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const onSignInScreen = segments[0] === 'sign-in';
+
+    if (!isAuthenticated && !onSignInScreen) {
+      router.replace('/sign-in');
+    } else if (isAuthenticated && onSignInScreen) {
+      router.replace('/');
+    }
+  }, [isAuthenticated, isLoading, segments]);
 
   // Show loading screen while restoring session from SecureStore
   if (isLoading) {
@@ -24,11 +39,8 @@ function RootNavigator() {
 
   return (
     <Stack>
-      {isAuthenticated ? (
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      ) : (
-        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
-      )}
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="sign-in" options={{ headerShown: false }} />
     </Stack>
   );
 }
