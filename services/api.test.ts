@@ -1,7 +1,7 @@
 /**
- * Tests for services/api.ts — 401 retry with token refresh.
+ * Tests for services/api.ts — simplified API client (device token auth, no refresh).
  */
-import { api, setAccessToken, setAuthHandlers } from '@/services/api';
+import { api, setAccessToken } from '@/services/api';
 
 // Mock config
 jest.mock('@/services/config', () => ({
@@ -12,13 +12,10 @@ jest.mock('@/services/config', () => ({
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
-const mockRefresh = jest.fn();
-const mockClear = jest.fn();
-
-function jsonResponse(data: any, status = 200) {
+function jsonResponse(data: any, statusCode = 200) {
   return {
-    ok: status >= 200 && status < 300,
-    status,
+    ok: statusCode >= 200 && statusCode < 300,
+    status: statusCode,
     json: () => Promise.resolve(data),
     text: () => Promise.resolve(JSON.stringify(data)),
   };
@@ -26,48 +23,56 @@ function jsonResponse(data: any, status = 200) {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  setAccessToken('test-token');
-  mockClear.mockResolvedValue(undefined);
-  // Register auth handlers
-  setAuthHandlers(mockRefresh, mockClear);
+  setAccessToken(null);
 });
 
-describe('api — 401 retry', () => {
-  test('401 triggers token refresh and retries request', async () => {
-    mockFetch
-      .mockResolvedValueOnce(jsonResponse({ error: 'Unauthorized' }, 401))
-      .mockResolvedValueOnce(jsonResponse({ data: 'success' }));
-    mockRefresh.mockResolvedValue(true);
+describe('api', () => {
+  test('successful request with device token', async () => {
+    setAccessToken('dt_test-token');
+    mockFetch.mockResolvedValue(jsonResponse({ data: 'ok' }));
 
     const result = await api('/api/test/');
 
-    expect(result).toEqual({ data: 'success' });
-    expect(mockRefresh).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ data: 'ok' });
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://test.local/api/test/',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer dt_test-token',
+        }),
+      }),
+    );
   });
 
-  test('401 refresh fails clears tokens and throws', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ error: 'Unauthorized' }, 401));
-    mockRefresh.mockResolvedValue(false);
+  test('request with skipAuth omits auth header', async () => {
+    setAccessToken('dt_test-token');
+    mockFetch.mockResolvedValue(jsonResponse({ data: 'ok' }));
 
-    await expect(api('/api/test/')).rejects.toThrow('401');
-    expect(mockClear).toHaveBeenCalled();
+    await api('/api/test/', { skipAuth: true });
+
+    const calledHeaders = mockFetch.mock.calls[0][1].headers;
+    expect(calledHeaders.Authorization).toBeUndefined();
   });
 
-  test('401 retries only once (no infinite loop)', async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ error: 'Unauthorized' }, 401));
-    mockRefresh.mockResolvedValue(true);
+  test('request without token omits auth header', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: 'ok' }));
 
-    await expect(api('/api/test/')).rejects.toThrow('401');
-    // First request + one retry = 2 fetches
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    await api('/api/test/');
+
+    const calledHeaders = mockFetch.mock.calls[0][1].headers;
+    expect(calledHeaders.Authorization).toBeUndefined();
   });
 
-  test('non-401 errors are not retried', async () => {
+  test('non-2xx response throws', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ error: 'Not found' }, 404));
+
+    await expect(api('/api/test/')).rejects.toThrow('404');
+  });
+
+  test('500 error throws', async () => {
     mockFetch.mockResolvedValue(jsonResponse({ error: 'Server Error' }, 500));
 
     await expect(api('/api/test/')).rejects.toThrow('500');
-    expect(mockRefresh).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

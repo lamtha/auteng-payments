@@ -6,12 +6,12 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { Colors } from '@/constants/theme';
-import { AuthProvider, useAuthContext } from '@/contexts/auth-context';
+import { DeviceProvider, useDeviceContext } from '@/contexts/device-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-/** Inner layout that gates navigation based on auth state. */
+/** Inner layout that gates navigation based on device pairing state. */
 function RootNavigator() {
-  const { isAuthenticated, isLoading } = useAuthContext();
+  const { isPaired, isLoading } = useDeviceContext();
   const colorScheme = useColorScheme() ?? 'light';
   const router = useRouter();
   const segments = useSegments();
@@ -19,16 +19,16 @@ function RootNavigator() {
   useEffect(() => {
     if (isLoading) return;
 
-    const onSignInScreen = segments[0] === 'sign-in';
+    const onPairScreen = segments[0] === 'pair-agent';
 
-    if (!isAuthenticated && !onSignInScreen) {
-      router.replace('/sign-in');
-    } else if (isAuthenticated && onSignInScreen) {
+    if (!isPaired && !onPairScreen) {
+      router.replace('/pair-agent');
+    } else if (isPaired && onPairScreen) {
       router.replace('/');
     }
-  }, [isAuthenticated, isLoading, segments]);
+  }, [isPaired, isLoading, segments]);
 
-  // Show loading screen while restoring session from SecureStore
+  // Show loading screen while restoring device token from SecureStore
   if (isLoading) {
     return (
       <View style={[styles.loading, { backgroundColor: Colors[colorScheme].background }]}>
@@ -40,7 +40,7 @@ function RootNavigator() {
   return (
     <Stack>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+      <Stack.Screen name="pair-agent" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -49,12 +49,12 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <AuthProvider>
+    <DeviceProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <RootNavigator />
         <StatusBar style="auto" />
       </ThemeProvider>
-    </AuthProvider>
+    </DeviceProvider>
   );
 }
 

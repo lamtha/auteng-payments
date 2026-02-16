@@ -225,3 +225,96 @@ app/(tabs)/index.tsx                             — Pending screen with FlatLis
 - `docs/v5/MVP_ARCH.md` — Updated auth strategy, API endpoints, sequence diagrams, code examples
 - `docs/v5/MVP_MOBILE.md` — Replaced auth section, updated pay flow, tech stack, file layout
 - `docs/v5/MVP_MOBILE_PLAN.md` — Added Phase 2.5, marked Phase 1 as superseded, updated Phase 4 and dependency graph
+
+---
+
+## Phase 2.5: Remove Auth Layer + Regression Test (2026-02-16)
+
+**Goal**: Remove Apple/Google Sign-In. The pairing code becomes identity, Apple Pay becomes the security gate. No login screen.
+
+### Completed
+
+**Backend:**
+- Added `DeviceSession` model — tracks paired devices by hashed `dt_`-prefixed token (same pattern as agent `ak_` keys)
+- Added `device_session` FK to `AgentAccount` (alongside existing `owner` FK)
+- Created `DeviceTokenAuthentication` class — `dt_` prefix, SHA-256 hash lookup, returns `(DeviceUser, DeviceSession)`
+- Created `POST /api/payments/agents/pair/` — takes pairing code, creates DeviceSession on first pair, returns device token + agent info
+- Updated `GET /api/payments/pending/` — switched from `JWTAuthentication` to `DeviceTokenAuthentication`, filters by `device_session` instead of `owner`
+- Removed `POST /api/auth/mobile/` URL route (code kept in `mobile_auth_views.py`)
+- Migration `0160_device_session` applied
+
+**Mobile:**
+- Created `services/device.ts` — device token storage in SecureStore, `restoreDeviceToken()`, `pairAgent()`, `clearDeviceToken()`
+- Simplified `services/api.ts` — removed 401 refresh/retry logic (device tokens don't expire), kept `setAccessToken` + auth header injection
+- Created `hooks/use-device.ts` — `isPaired`, `isLoading`, `pair(code)`, `unpair()`
+- Created `contexts/device-context.tsx` — `DeviceProvider` wrapping app (replaces `AuthProvider`)
+- Created `app/pair-agent.tsx` — 6-digit pairing code input with auto-submit, AutEng branding, error/retry states
+- Updated `app/_layout.tsx` — `DeviceProvider` + pair gate (not paired → `/pair-agent`, paired → tabs)
+- Removed sign-in screen, auth service, auth hook, auth context, auth types
+- Removed `expo-apple-authentication` from package.json, app.json plugins, jest-setup.ts
+
+**Tests (70 total):**
+- Backend: 34 tests (5 device auth, 7 pairing, 22 payments — 4 model, 6 agent auth, 7 create request, 5 pending list)
+- Mobile: 36 tests (12 device service, 5 device hook, 5 API client, 4 pair-agent screen, 4 pending requests hook, 8 payment request card — 2 unchanged from Phase 2)
+- Deleted: 22 backend auth tests (test_mobile_auth.py), 27 mobile auth tests (auth.test.ts, use-auth.test.ts, sign-in.test.tsx, old api.test.ts)
+
+### Verified
+
+- All 34 backend tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_device_auth.py auteng/tests/test_pairing.py auteng/tests/test_payments.py -v`
+- All 36 mobile tests pass: `cd payments && npx jest`
+
+### Files
+
+```
+# Backend — New
+be/auteng/auth/device_auth.py                  — DeviceTokenAuthentication + DeviceUser
+be/auteng/tests/test_device_auth.py            — 5 device token auth tests
+be/auteng/tests/test_pairing.py                — 7 pairing endpoint tests
+be/auteng/migrations/0160_device_session.py    — DeviceSession model + AgentAccount.device_session FK
+
+# Backend — Edited
+be/auteng/models/payment_models.py             — Added DeviceSession model, device_session FK on AgentAccount
+be/auteng/models/__init__.py                   — Exported DeviceSession
+be/auteng/view/payments_views.py               — Added pair_agent, switched list_pending_payments to device token auth
+be/auteng/urls.py                              — Removed mobile_auth route, added pair_agent route
+be/auteng/tests/test_payments.py               — Updated pending tests to device token auth
+
+# Backend — Removed
+be/auteng/tests/test_mobile_auth.py            — Deleted (22 Apple/Google Sign-In tests)
+
+# Mobile — New
+services/device.ts                             — Device token storage + pairing API
+services/device.test.ts                        — 12 device service tests
+hooks/use-device.ts                            — Device pairing state hook
+hooks/use-device.test.ts                       — 5 device hook tests
+contexts/device-context.tsx                    — DeviceProvider (replaces AuthProvider)
+app/pair-agent.tsx                             — 6-digit pairing code screen
+__tests__/app/pair-agent.test.tsx              — 4 pair-agent screen tests
+
+# Mobile — Edited
+services/api.ts                                — Removed 401 refresh/retry, simplified
+services/api.test.ts                           — Rewrote for simplified API (5 tests)
+app/_layout.tsx                                — DeviceProvider + pair gate (replaces AuthProvider + auth gate)
+jest-setup.ts                                  — Removed expo-apple-authentication mock
+package.json                                   — Removed expo-apple-authentication dependency
+app.json                                       — Removed expo-apple-authentication plugin
+
+# Mobile — Removed
+app/sign-in.tsx                                — Deleted (replaced by pair-agent.tsx)
+services/auth.ts                               — Deleted (replaced by device.ts)
+services/auth.test.ts                          — Deleted
+hooks/use-auth.ts                              — Deleted (replaced by use-device.ts)
+hooks/use-auth.test.ts                         — Deleted
+contexts/auth-context.tsx                      — Deleted (replaced by device-context.tsx)
+types/auth.ts                                  — Deleted
+__tests__/app/sign-in.test.tsx                 — Deleted
+```
+
+### Notes
+
+- Device tokens use `dt_` prefix + 32 bytes hex (67 chars total), matching the `ak_` pattern for agent keys
+- `DeviceSession.device_token_hash` stores SHA-256 of the full token — raw token is only returned once at first pairing
+- `DeviceUser` is a minimal wrapper satisfying DRF's `IsAuthenticated` permission (`.is_authenticated = True`)
+- Pairing is single-step for now (enter code → agent paired with default caps). Full two-step flow with cap configuration deferred to Phase 6
+- `AgentAccount.owner` FK kept for future web dashboard use. Mobile auth uses `device_session` exclusively
+- `mobile_auth_views.py` code kept but URL route removed — can be fully deleted once Phase 6 confirms no fallback needed
