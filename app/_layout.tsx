@@ -1,3 +1,4 @@
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -6,6 +7,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { Colors } from '@/constants/theme';
+import { Config } from '@/services/config';
 import { DeviceProvider, useDeviceContext } from '@/contexts/device-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -49,12 +51,17 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <DeviceProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <RootNavigator />
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </DeviceProvider>
+    <StripeProvider
+      publishableKey={Config.stripePublishableKey}
+      merchantIdentifier="merchant.ai.auteng.payments"
+    >
+      <DeviceProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <RootNavigator />
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </DeviceProvider>
+    </StripeProvider>
   );
 }
 

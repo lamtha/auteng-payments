@@ -1,16 +1,26 @@
+import { useCallback } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet } from 'react-native';
 
 import { PaymentRequestCard } from '@/components/payment-request-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { usePaymentAction } from '@/hooks/use-payment-action';
 import { usePendingRequests } from '@/hooks/use-pending-requests';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { PaymentRequest } from '@/types/payment';
 
 export default function PendingScreen() {
-  const { requests, isLoading, error, refresh } = usePendingRequests();
+  const { requests, isLoading, error: fetchError, refresh } = usePendingRequests();
   const tintColor = useThemeColor({}, 'tint');
   const dangerColor = useThemeColor({}, 'danger');
+
+  const onActionComplete = useCallback(() => {
+    refresh();
+  }, [refresh]);
+
+  const { pay, deny, processingRequestId, error: actionError, clearError } = usePaymentAction(onActionComplete);
+
+  const displayError = actionError ?? (fetchError ? 'Failed to load requests' : null);
 
   if (isLoading && requests.length === 0) {
     return (
@@ -20,7 +30,7 @@ export default function PendingScreen() {
     );
   }
 
-  if (error && requests.length === 0) {
+  if (fetchError && requests.length === 0) {
     return (
       <ThemedView style={styles.centered}>
         <ThemedText style={[styles.errorText, { color: dangerColor }]}>
@@ -35,10 +45,25 @@ export default function PendingScreen() {
 
   return (
     <ThemedView style={styles.container}>
+      {actionError ? (
+        <Pressable
+          style={[styles.errorBanner, { backgroundColor: dangerColor }]}
+          onPress={clearError}
+        >
+          <ThemedText style={styles.errorBannerText}>{actionError}</ThemedText>
+        </Pressable>
+      ) : null}
       <FlatList<PaymentRequest>
         data={requests}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <PaymentRequestCard request={item} />}
+        renderItem={({ item }) => (
+          <PaymentRequestCard
+            request={item}
+            onPay={pay}
+            onDeny={deny}
+            isProcessing={processingRequestId === item.id}
+          />
+        )}
         refreshControl={
           <RefreshControl refreshing={isLoading} onRefresh={refresh} tintColor={tintColor} />
         }
@@ -90,5 +115,15 @@ const styles = StyleSheet.create({
   retryText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  errorBanner: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  errorBannerText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });

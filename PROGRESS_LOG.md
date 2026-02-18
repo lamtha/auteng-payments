@@ -388,3 +388,81 @@ services/api.test.ts                           — Added 401 handler tests (7 te
 app/(tabs)/history.tsx                         — Deferred to later milestone
 app/(tabs)/agents.tsx                          — Deferred to later milestone
 ```
+
+---
+
+## Phase 3: Payment + Card Issuance (2026-02-16)
+
+**Goal**: Owner taps "Pay $X.XX", pays via Apple Pay, Stripe webhook confirms payment and marks the request APPROVED. Deny flow included.
+
+### Completed
+
+**Backend:**
+- Created `OwnerCharge` model (1:1 with PaymentRequest, tracks Stripe PaymentIntent, status lifecycle: PENDING → SUCCEEDED/FAILED/REFUNDED)
+- Created `POST /api/payments/{uuid}/pay/` — creates Stripe PaymentIntent, returns client_secret for Apple Pay. Handles retry (existing OwnerCharge returns existing PI). Validates PENDING status, expiry, device ownership.
+- Created `POST /api/payments/{uuid}/deny/` — marks request DENIED with decided_at/decided_by
+- Created `GET /api/payments/{uuid}/status/` — owner polls for status after Apple Pay (waiting for webhook to flip APPROVED)
+- Added `payment_intent.succeeded` webhook handler in `stripe_webhook_views.py` — updates OwnerCharge to SUCCEEDED, PaymentRequest to APPROVED. Idempotent on duplicate webhooks.
+- Added shared `_get_payment_request_for_device()` helper for ownership validation
+- Added `STRIPE_ISSUING_CARDHOLDER_ID` placeholder to Stripe settings (prep for Phase 4)
+- Migration `0162_owner_charge` applied
+
+**Mobile:**
+- Installed `@stripe/stripe-react-native` with Expo config plugin (Apple Pay merchant ID, no Google Pay)
+- Added `StripeProvider` wrapping entire app tree in root layout
+- Created `services/payments.ts` — `payRequest()`, `denyRequest()`, `getRequestStatus()`, `pollForApproval()` (polls every 1.5s, 30s timeout)
+- Created `hooks/use-payment-action.ts` — encapsulates full pay flow (create PI → Apple Pay sheet → poll for APPROVED) and deny flow. Tracks `processingRequestId` for per-card loading state.
+- Updated `PaymentRequestCard` with "Pay $X.XX" primary button and "Deny" text button. Shows spinner when processing.
+- Updated Pending screen — wires `usePaymentAction` into card list, dismissible error banner for action failures.
+- Added `PayResponse` and `PaymentStatusResponse` types
+
+**Tests (69 total):**
+- Backend: 15 tests (2 model, 5 pay endpoint, 3 deny endpoint, 2 status endpoint, 3 webhook handler)
+- Mobile: 54 tests (40 existing + 6 payments service, 4 payment action hook, 4 updated card component)
+
+### Verified
+
+- All 15 Phase 3 backend tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_payment_flow.py -v`
+- All 34 existing backend tests pass (no regressions)
+- All 54 mobile tests pass: `cd payments && npx jest`
+
+### Files
+
+```
+# Backend — New
+be/auteng/migrations/0162_owner_charge.py              — OwnerCharge model migration
+be/auteng/tests/test_payment_flow.py                   — 15 Phase 3 tests
+
+# Backend — Edited
+be/auteng/models/payment_models.py                     — Added OwnerCharge model + OwnerChargeStatus
+be/auteng/models/__init__.py                           — Exported OwnerCharge, OwnerChargeStatus
+be/auteng/view/payments_views.py                       — Added pay, deny, status views + webhook handler + helper
+be/auteng/view/stripe_webhook_views.py                 — Added payment_intent.succeeded routing
+be/auteng/urls.py                                      — Added 3 new routes (pay, deny, status)
+be/llabs/settings/stripe.py                            — Added STRIPE_ISSUING_CARDHOLDER_ID placeholder
+
+# Mobile — New
+services/payments.ts                                   — Payment API service (pay, deny, status, poll)
+services/payments.test.ts                              — 6 payments service tests
+hooks/use-payment-action.ts                            — Pay/deny flow hook with Apple Pay integration
+hooks/use-payment-action.test.ts                       — 4 payment action hook tests
+
+# Mobile — Edited
+package.json                                           — Added @stripe/stripe-react-native
+app.json                                               — Added Stripe plugin with Apple Pay merchant ID
+app/_layout.tsx                                        — Added StripeProvider wrapping app tree
+types/payment.ts                                       — Added PayResponse, PaymentStatusResponse
+components/payment-request-card.tsx                    — Added Pay/Deny buttons, processing spinner
+components/payment-request-card.test.tsx               — Updated for buttons, added 4 new tests (13 total)
+app/(tabs)/index.tsx                                   — Wired usePaymentAction, error banner
+jest-setup.ts                                          — Added @stripe/stripe-react-native mock
+.env.example                                           — Updated with Apple Pay notes
+```
+
+### Notes
+
+- Apple Pay requires a real device + Apple Pay sandbox setup. Simulator can only test the deny flow and UI states.
+- The `pay` endpoint handles retries: if an OwnerCharge already exists for a request (e.g. user cancelled first Apple Pay attempt), it retrieves the existing PaymentIntent instead of creating a new one.
+- Card issuance is **not** in Phase 3 — the webhook handler marks the request APPROVED but does not create a Stripe Issuing card. That's Phase 4.
+- For local webhook testing: `stripe listen --forward-to localhost:8000/webhooks/stripe/`
+- `formatAmount` was changed from a private function to a named export in payment-request-card.tsx (used by both the amount display and the Pay button label)

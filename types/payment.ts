@@ -17,3 +17,17 @@ export interface PaymentRequest {
   created_at: string;
   expires_at: string;
 }
+
+export interface PayResponse {
+  client_secret: string;
+  amount_minor: number;
+  currency: string;
+}
+
+export interface PaymentStatusResponse {
+  id: string;
+  status: string;
+  amount_minor: number;
+  currency: string;
+  merchant_name: string;
+}

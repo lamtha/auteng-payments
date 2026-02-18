@@ -1,7 +1,7 @@
 /**
  * Tests for components/payment-request-card.tsx
  */
-import { render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen } from '@testing-library/react-native';
 
 import { PaymentRequestCard } from '@/components/payment-request-card';
 import type { PaymentRequest } from '@/types/payment';
@@ -37,46 +37,92 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   };
 }
 
+const mockOnPay = jest.fn();
+const mockOnDeny = jest.fn();
+
+function renderCard(overrides: Partial<PaymentRequest> = {}, isProcessing = false) {
+  return render(
+    <PaymentRequestCard
+      request={makeRequest(overrides)}
+      onPay={mockOnPay}
+      onDeny={mockOnDeny}
+      isProcessing={isProcessing}
+    />,
+  );
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
 describe('PaymentRequestCard', () => {
   test('renders formatted amount', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
+    renderCard();
     expect(screen.getByText('$12.99')).toBeTruthy();
   });
 
   test('renders merchant name', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
+    renderCard();
     expect(screen.getByText('Example Store')).toBeTruthy();
   });
 
   test('renders merchant domain', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
+    renderCard();
     expect(screen.getByText('example.com')).toBeTruthy();
   });
 
   test('renders purpose', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
+    renderCard();
     expect(screen.getByText('Buy replacement air filter')).toBeTruthy();
   });
 
   test('renders agent name badge', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
+    renderCard();
     expect(screen.getByText('TestAgent')).toBeTruthy();
   });
 
   test('renders time remaining', () => {
-    render(<PaymentRequestCard request={makeRequest()} />);
-    // Should show something like "10m left"
+    renderCard();
     expect(screen.getByText(/\d+m left/)).toBeTruthy();
   });
 
   test('hides domain when empty', () => {
-    render(<PaymentRequestCard request={makeRequest({ merchant_domain: '' })} />);
+    renderCard({ merchant_domain: '' });
     expect(screen.queryByText('example.com')).toBeNull();
   });
 
   test('shows Expired for past expiry', () => {
     const pastExpiry = new Date(Date.now() - 60000).toISOString();
-    render(<PaymentRequestCard request={makeRequest({ expires_at: pastExpiry })} />);
+    renderCard({ expires_at: pastExpiry });
     expect(screen.getByText('Expired')).toBeTruthy();
+  });
+
+  test('renders Pay button with amount', () => {
+    renderCard();
+    expect(screen.getByText('Pay $12.99')).toBeTruthy();
+  });
+
+  test('renders Deny button', () => {
+    renderCard();
+    expect(screen.getByText('Deny')).toBeTruthy();
+  });
+
+  test('calls onPay when Pay button pressed', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('pay-button'));
+    expect(mockOnPay).toHaveBeenCalledWith(expect.objectContaining({ id: 'test-uuid' }));
+  });
+
+  test('calls onDeny when Deny button pressed', () => {
+    renderCard();
+    fireEvent.press(screen.getByTestId('deny-button'));
+    expect(mockOnDeny).toHaveBeenCalledWith(expect.objectContaining({ id: 'test-uuid' }));
+  });
+
+  test('shows spinner when processing', () => {
+    renderCard({}, true);
+    expect(screen.getByText('Processing...')).toBeTruthy();
+    expect(screen.queryByText('Pay $12.99')).toBeNull();
+    expect(screen.queryByText('Deny')).toBeNull();
   });
 });

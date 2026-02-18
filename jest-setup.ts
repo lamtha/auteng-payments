@@ -9,6 +9,18 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Mock @stripe/stripe-react-native
+jest.mock('@stripe/stripe-react-native', () => ({
+  StripeProvider: jest.fn(({ children }: any) => children),
+  confirmPlatformPayPayment: jest.fn().mockResolvedValue({
+    error: undefined,
+    paymentIntent: { id: 'pi_mock', status: 'succeeded' },
+  }),
+  PlatformPay: {
+    PaymentType: { Immediate: 'Immediate' },
+  },
+}));
+
 // Mock expo-router
 jest.mock('expo-router', () => ({
   router: {
