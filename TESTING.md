@@ -109,6 +109,9 @@ PROCESS_NAME=backend python manage.py seed_payment_flow
 
 # Non-interactive: creates everything immediately (no pairing wait)
 PROCESS_NAME=backend python manage.py seed_payment_flow --no-wait
+
+# Create another payment for an existing agent (test multiple requests)
+PROCESS_NAME=backend python manage.py seed_payment_flow --agent-uuid <uuid>
 ```
 
 ### Test scenarios
@@ -122,6 +125,27 @@ PROCESS_NAME=backend python manage.py seed_payment_flow --no-wait
 1. Seed a payment request (pair first, or use `--no-wait`)
 2. Pull to refresh in the app — request appears
 3. Tap "Deny" — request disappears, backend shows DENIED
+
+#### Multiple payments on same agent
+Test that a single paired agent can receive multiple payment requests:
+
+1. Get your agent UUID (from the first `seed_payment_flow` output, or query the DB):
+   ```bash
+   PROCESS_NAME=backend python manage.py shell -c "
+   from auteng.models import AgentAccount
+   agent = AgentAccount.objects.latest('created_at')
+   print(agent.uuid)
+   "
+   ```
+
+2. Create a second payment request for that agent:
+   ```bash
+   PROCESS_NAME=backend python manage.py seed_payment_flow \
+     --agent-uuid <uuid> \
+     --amount 2499
+   ```
+
+3. Pull to refresh in the app — both payment requests should appear (if the first is still pending)
 
 #### Pay flow — simulated (no Apple Pay needed)
 ```bash
