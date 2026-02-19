@@ -466,3 +466,92 @@ jest-setup.ts                                          — Added @stripe/stripe-
 - Card issuance is **not** in Phase 3 — the webhook handler marks the request APPROVED but does not create a Stripe Issuing card. That's Phase 4.
 - For local webhook testing: `stripe listen --forward-to localhost:8000/webhooks/stripe/`
 - `formatAmount` was changed from a private function to a named export in payment-request-card.tsx (used by both the amount display and the Pay button label)
+
+---
+
+## Phase 4: Card Delivery & Agent Use (2026-02-18)
+
+**Goal**: Close the core payment loop — webhook issues Stripe Issuing card, agent polls for card details, capture webhook marks card USED and request COMPLETED. Backend only.
+
+### Completed
+
+**Backend — Models:**
+- Added `IssuedCard` model (1:1 with PaymentRequest, tracks Stripe Issuing card: stripe_card_id, status, spend_limit_minor, currency, expires_at, last4). PAN/CVC never stored.
+- Added `LedgerEvent` model (append-only audit trail: payment_request FK, issued_card FK nullable, event_type, payload JSON, chronological ordering)
+- Added `IssuedCardStatus` enum: ACTIVE | USED | REVOKED | EXPIRED
+- Added `LedgerEventType` enum: REQUEST_CREATED | APPROVED | DENIED | OWNER_CHARGED | CARD_ISSUED | AUTH | CAPTURE | VOID | REVOKED | EXPIRED
+- Migration `0163_issued_card_ledger_event` applied
+
+**Backend — Stripe Issuing service:**
+- Created `services/stripe_issuing_service.py` — three functions:
+  - `create_virtual_card(payment_request)` — creates card via Stripe Issuing API with company cardholder, spending limit = request amount, 10-min TTL
+  - `retrieve_card_details(issued_card)` — fetches PAN/CVC from Stripe (expand=['number', 'cvc']), only within 5-min detail window from card creation
+  - `cancel_card(issued_card)` — cancels card via Stripe API
+
+**Backend — Webhook handlers:**
+- Extended `handle_payment_intent_succeeded` — after marking OwnerCharge SUCCEEDED, creates virtual card via Stripe Issuing, logs OWNER_CHARGED + APPROVED + CARD_ISSUED ledger events. Marks FAILED on card creation error.
+- Added `handle_issuing_authorization_request` — synchronous real-time auth decision (2s deadline). Validates card ACTIVE, not expired, amount within limit. Returns `{"approved": bool}` as JsonResponse.
+- Added `handle_issuing_transaction_created` — marks card USED, cancels via Stripe API, increments `agent_account.total_spent_minor`, marks PaymentRequest COMPLETED, logs CAPTURE ledger event. Idempotent.
+- Routed `issuing_authorization.request` and `issuing_transaction.created` in `stripe_webhook_views.py`
+
+**Backend — Agent polling endpoint:**
+- Created `GET /api/payments/{uuid}/` — agent polls for status + card details (AgentAPIKeyAuthentication). Returns card PAN/CVC/expiry when APPROVED and within 5-min window, status-only otherwise.
+
+**Backend — Agent auth fix:**
+- Added `AgentUser` class for DRF `IsAuthenticated` when agent has no owner User (device-session-only pairing from Phase 2.5)
+- Updated `AgentAPIKeyAuthentication.authenticate()` — `select_related` includes `device_session`, pairing check allows device-session-only agents
+
+**Backend — Ledger events in existing flows:**
+- `create_payment_request` logs REQUEST_CREATED
+- `deny_payment_request` logs DENIED
+
+**Backend — Admin:**
+- Added `OwnerChargeAdmin`, `IssuedCardAdmin`, `LedgerEventAdmin` with list_display, filters, search
+
+**Tests (78 total backend, 0 regressions):**
+- 29 new Phase 4 tests across 9 test classes:
+  - TestIssuedCardModel (2), TestLedgerEventModel (2), TestStripeIssuingService (4)
+  - TestPaymentIntentSucceededWithCard (3), TestAgentGetPaymentRequest (6)
+  - TestIssuingAuthorizationRequest (5), TestIssuingTransactionCreated (4)
+  - TestAgentAuthDeviceSessionOnly (2), TestLedgerEventLogging (1 — combined create+deny)
+- 49 existing tests pass (2 Phase 3 webhook tests updated to mock `stripe.issuing.Card.create`)
+
+### Verified
+
+- All 29 Phase 4 tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_payments_ph4.py -v`
+- All 49 existing backend tests pass (no regressions)
+- All 54 mobile tests pass (no mobile changes needed)
+
+### Files
+
+```
+# Backend — New
+be/auteng/services/stripe_issuing_service.py      — Stripe Issuing API wrapper (create/retrieve/cancel)
+be/auteng/tests/test_payments_ph4.py              — 29 Phase 4 tests
+be/auteng/migrations/0163_issued_card_ledger_event.py — IssuedCard + LedgerEvent migration
+
+# Backend — Edited
+be/auteng/models/payment_models.py                — Added IssuedCard, LedgerEvent, IssuedCardStatus, LedgerEventType
+be/auteng/models/__init__.py                      — Exported new models and enums
+be/auteng/view/payments_views.py                  — Extended webhook handler, added agent polling, added issuing handlers, added ledger events
+be/auteng/view/stripe_webhook_views.py            — Routed issuing_authorization.request + issuing_transaction.created
+be/auteng/auth/agent_auth.py                      — Added AgentUser, fixed device-session-only auth
+be/auteng/urls.py                                 — Added GET /api/payments/{uuid}/ agent polling route
+be/auteng/admin/payment_admin.py                  — Added OwnerCharge, IssuedCard, LedgerEvent admin
+be/auteng/tests/test_payment_flow.py              — Updated 2 webhook tests to mock Stripe Issuing
+be/auteng/management/commands/seed_payment_flow.py — Updated simulate-pay to show card issuance results + agent polling curl
+be/llabs/settings/stripe.py                       — STRIPE_ISSUING_CARDHOLDER_ID env var (added in Phase 3, used in Phase 4)
+
+# Docs
+payments/TESTING.md                               — Added Phase 4 testing instructions (Stripe Issuing setup, agent polling, capture simulation)
+```
+
+### Notes
+
+- Card PAN/CVC are **never stored** in the DB — always fetched from Stripe on each agent poll, and only within a 5-min detail window from card creation
+- `issuing_authorization.request` is a synchronous webhook — must return JSON response within 2 seconds. Uses `JsonResponse` early return in `stripe_webhook` view.
+- Card lifecycle: ACTIVE → USED (on capture) / REVOKED / EXPIRED
+- PaymentRequest lifecycle: PENDING → APPROVED (card issued) → COMPLETED (card used) / DENIED / FAILED / EXPIRED
+- Stripe Issuing test mode requires: Issuing enabled on account, a cardholder created (`STRIPE_ISSUING_CARDHOLDER_ID`), and Issuing balance funded via Topups
+- To test capture in test mode, use Stripe Dashboard "Create test purchase" on the card, or `stripe issuing transactions create_force_capture`
+- This completes the Milestone 1 (MVP) backend. No mobile changes were needed for Phase 4 — the mobile app already polls for status and shows APPROVED/DENIED states.

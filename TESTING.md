@@ -151,14 +151,95 @@ Test that a single paired agent can receive multiple payment requests:
 ```bash
 PROCESS_NAME=backend python manage.py seed_payment_flow --simulate-pay
 ```
-This creates an OwnerCharge and fires the webhook handler directly, bypassing Apple Pay. Useful for verifying the backend approve flow and the mobile polling/refresh.
+This creates an OwnerCharge and fires the webhook handler directly, bypassing Apple Pay. In Phase 4+, it also issues a Stripe Issuing virtual card (requires Stripe Issuing setup — see below).
 
 #### Pay flow — real Apple Pay (device only)
 1. Apple Pay sandbox configured in Apple Developer portal
-2. `stripe listen` running for webhook forwarding
+2. `stripe listen` running for webhook forwarding (include `--events` for issuing — see below)
 3. Seed a payment request, tap "Pay $X.XX" in the app
 4. Confirm via Face ID / Apple Pay sheet
-5. Webhook fires → backend marks APPROVED → app polls and refreshes
+5. Webhook fires → backend marks APPROVED + issues card → app polls and refreshes
+
+#### Card issuance & agent polling (Phase 4)
+
+After the owner pays (simulated or real Apple Pay), the backend issues a Stripe Issuing virtual card. The agent can then poll for card details.
+
+**Stripe Issuing setup (one-time, test mode):**
+
+1. **Enable Issuing** on your Stripe test account at [dashboard.stripe.com/test/issuing/overview](https://dashboard.stripe.com/test/issuing/overview). Test mode Issuing is available immediately — no application needed.
+
+2. **Create a cardholder** (the company-level cardholder used for all card issuance):
+   ```bash
+   stripe issuing cardholders create \
+     --name "AutEng Inc" \
+     --type company \
+     -d "billing[address][line1]=123 Main St" \
+     -d "billing[address][city]=San Francisco" \
+     -d "billing[address][state]=CA" \
+     -d "billing[address][postal_code]=94105" \
+     -d "billing[address][country]=US"
+   ```
+   Copy the `ich_...` ID from the output.
+
+3. **Fund the test Issuing balance** (Stripe test mode provides a Topup API):
+   ```bash
+   stripe topups create --amount 100000 --currency usd \
+     --description "Test issuing float" \
+     --source tok_bypassPending
+   ```
+   Wait a few seconds, then verify:
+   ```bash
+   stripe balance retrieve
+   ```
+   You should see an `issuing` available balance.
+
+4. **Set the env var** in your backend `.env`:
+   ```
+   STRIPE_ISSUING_CARDHOLDER_ID=ich_...
+   ```
+
+**Webhook forwarding for Issuing events:**
+
+The standard `stripe listen` command forwards all events. To be explicit:
+```bash
+stripe listen --forward-to localhost:8000/webhooks/stripe/ \
+  --events payment_intent.succeeded,issuing_authorization.request,issuing_transaction.created
+```
+
+Note: `issuing_authorization.request` requires a **synchronous** response within 2 seconds. The backend returns a JSON `{"approved": true/false}` decision.
+
+**Testing the full card flow:**
+
+1. Seed + simulate pay:
+   ```bash
+   PROCESS_NAME=backend python manage.py seed_payment_flow --simulate-pay
+   ```
+   Output shows the issued card ID, last4, spend limit, expiry, and ledger events.
+
+2. Agent polls for card details (use the API key from seed output):
+   ```bash
+   curl http://localhost:8000/api/payments/<payment_uuid>/ \
+     -H "Authorization: Bearer ak_..."
+   ```
+   Within 5 minutes of card creation, the response includes full card details (number, CVC, expiry). After 5 minutes, only the status is returned.
+
+3. To test the real Apple Pay → card flow on device:
+   - `stripe listen` running
+   - Pair agent in app, seed a payment request
+   - Tap "Pay" → Apple Pay → webhook fires → card issued
+   - Use the curl command above to poll as the agent
+
+**Issuing test limitations:**
+
+- Stripe test mode Issuing cards can't be used at real merchants
+- To simulate a capture (card used at merchant), use the Stripe Dashboard: Issuing → Cards → find the card → "Create test purchase"
+- Or use the Stripe API:
+  ```bash
+  stripe issuing transactions create_force_capture \
+    --amount 1299 --currency usd \
+    -d "card=ic_..." \
+    -d "merchant_data[name]=Test Merchant"
+  ```
 
 ### Verifying backend state
 
@@ -170,6 +251,21 @@ PROCESS_NAME=backend python manage.py shell -c "
 from auteng.models import PaymentRequest
 for pr in PaymentRequest.objects.all():
     print(f'{pr.uuid}  {pr.status}  {pr.merchant_name}')
+"
+
+# Check issued cards
+PROCESS_NAME=backend python manage.py shell -c "
+from auteng.models import IssuedCard
+for card in IssuedCard.objects.select_related('payment_request').all():
+    print(f'{card.stripe_card_id}  ****{card.last4}  {card.status}  PR:{card.payment_request.uuid}')
+"
+
+# View ledger events for a payment request
+PROCESS_NAME=backend python manage.py shell -c "
+from auteng.models import LedgerEvent, PaymentRequest
+pr = PaymentRequest.objects.latest('created_at')
+for ev in pr.ledger_events.order_by('created_at'):
+    print(f'{ev.event_type:20s}  {ev.created_at.strftime(\"%H:%M:%S\")}  {ev.payload}')
 "
 ```
 
@@ -195,8 +291,12 @@ Uses the `production` EAS profile (`eas.json`), auto-increments version, and pro
 - [ ] Payment requests appear after pull-to-refresh
 - [ ] Deny flow updates status correctly
 - [ ] Apple Pay flow completes (real Stripe keys, real webhook endpoint)
+- [ ] Card issued after Apple Pay succeeds (check admin or shell)
+- [ ] Agent polling returns card details within 5-min window
+- [ ] Agent polling returns no card details after 5-min window
 - [ ] Session persists across app restart
 - [ ] Expired requests are handled gracefully
+- [ ] Ledger events trail is complete for full lifecycle
 
 ---
 
@@ -229,8 +329,14 @@ For reference — the Django backend has its own test suite:
 ```bash
 cd be && source activate auteng 2>/dev/null
 
-# Payment flow tests
+# Phase 3 payment flow tests
 PROCESS_NAME=test pytest auteng/tests/test_payment_flow.py -v
+
+# Phase 4 card issuance + agent polling tests
+PROCESS_NAME=test pytest auteng/tests/test_payments_ph4.py -v
+
+# All payment tests together
+PROCESS_NAME=test pytest auteng/tests/test_payments.py auteng/tests/test_payment_flow.py auteng/tests/test_payments_ph4.py -v
 
 # All backend tests
 PROCESS_NAME=test pytest auteng/tests/ -v
