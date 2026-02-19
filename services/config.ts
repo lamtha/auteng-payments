@@ -5,3 +5,6 @@ export const Config = {
   /** Stripe publishable key for Apple Pay / Google Pay. */
   stripePublishableKey: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '',
 };
+
+// Debug: log the resolved config on app startup
+console.log('[Config] apiUrl:', Config.apiUrl);
