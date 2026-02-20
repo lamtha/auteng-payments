@@ -555,3 +555,87 @@ payments/TESTING.md                               — Added Phase 4 testing inst
 - Stripe Issuing test mode requires: Issuing enabled on account, a cardholder created (`STRIPE_ISSUING_CARDHOLDER_ID`), and Issuing balance funded via Topups
 - To test capture in test mode, use Stripe Dashboard "Create test purchase" on the card, or `stripe issuing transactions create_force_capture`
 - This completes the Milestone 1 (MVP) backend. No mobile changes were needed for Phase 4 — the mobile app already polls for status and shows APPROVED/DENIED states.
+
+---
+
+## Phase 4.5: Back Out Stripe Issuing & Prepare for v6 Pivot (2026-02-19)
+
+**Goal**: Remove Stripe Issuing card code blocked by KYC. Keep everything that carries forward to v6 (pairing, device auth, Apple Pay payment, pending requests UI, audit trail). Leave the codebase ready for v6 wallet funding work.
+
+### Context
+
+Stripe Issuing requires KYC: AutEng must be approved as a card program manager, cardholders need identity verification, and compliance scales per user. The code works in test mode but cannot ship to production. Decision: pivot to crypto wallet funding (v6) — agent generates its own EVM wallet, owner funds via Coinbase On-Ramp. See `docs/v6/VISION_CRYPTO.md`.
+
+### Completed
+
+**Backend — Removed:**
+- Deleted `IssuedCard` model and `IssuedCardStatus` enum from `payment_models.py`
+- Deleted card-specific `LedgerEventType` values: `CARD_ISSUED`, `AUTH`, `CAPTURE`, `VOID`, `REVOKED`, `EXPIRED`
+- Removed `PaymentRequestStatus.COMPLETED` (was set after card capture — no card capture in v6)
+- Removed `issued_card` FK from `LedgerEvent` model
+- Deleted `services/stripe_issuing_service.py` (create/retrieve/cancel virtual card — 116 lines)
+- Deleted `handle_issuing_authorization_request()` (sync real-time auth decision — 63 lines)
+- Deleted `handle_issuing_transaction_created()` (capture → card USED → request COMPLETED — 62 lines)
+- Removed card detail retrieval from `get_payment_request_for_agent()` (agent poll returns status only)
+- Removed `issuing_authorization.request` and `issuing_transaction.created` webhook routing from `stripe_webhook_views.py`
+- Removed `IssuedCardAdmin` from admin, removed `card_short` display and `issued_card` from `LedgerEventAdmin`
+- Removed `STRIPE_ISSUING_CARDHOLDER_ID` from Stripe settings
+- Removed unused `JsonResponse` import from `stripe_webhook_views.py`
+
+**Backend — Simplified:**
+- `handle_payment_intent_succeeded()` — now marks OwnerCharge SUCCEEDED + PaymentRequest APPROVED + logs `OWNER_CHARGED` and `APPROVED` ledger events. No card issuance.
+- `seed_payment_flow` management command — removed card issuance output from `_simulate_pay`, removed `IssuedCard` import
+
+**Backend — Kept (carries to v6):**
+- `AgentAccount` + `AgentAPIKeyAuthentication`
+- `DeviceSession` + `DeviceTokenAuthentication`
+- `PaymentRequest` (will be renamed to `FundingRequest` in v6)
+- `OwnerCharge` (temporary — replaced by `OnRampTransfer` in v6)
+- `LedgerEvent` with `REQUEST_CREATED`, `APPROVED`, `DENIED`, `OWNER_CHARGED` event types
+- Pairing, pending list, pay/deny/status endpoints, `payment_intent.succeeded` webhook handler
+- All URL routes unchanged
+
+**Tests:**
+- Deleted `test_payments_ph4.py` (29 Phase 4 tests — Stripe Issuing service, card delivery, authorization, capture)
+- Updated 2 Phase 3 webhook tests in `test_payment_flow.py` — removed `stripe_issuing_service` mocks (handler no longer calls issuing service)
+- All 37 remaining backend tests pass (22 Phase 2/2.5 + 15 Phase 3)
+- No mobile changes — mobile tests unaffected
+
+**Migration:**
+- `0164_back_out_stripe_issuing` — removes `issued_card` FK from LedgerEvent, alters LedgerEventType choices, alters PaymentRequestStatus choices, deletes IssuedCard table. Applied successfully.
+
+### Verified
+
+- Agent creates request → owner pays via Apple Pay → request marked APPROVED (no card issued)
+- Agent polls → gets `APPROVED` status (no card details)
+- All existing pairing, pending list, deny flows still work
+- All 37 backend tests pass: `cd be && PROCESS_NAME=test pytest auteng/tests/test_payments.py auteng/tests/test_payment_flow.py -v`
+- All mobile tests pass unchanged (no mobile changes in this phase)
+
+### Files
+
+```
+# Backend — Deleted
+be/auteng/services/stripe_issuing_service.py          — Stripe Issuing API wrapper (create/retrieve/cancel)
+be/auteng/tests/test_payments_ph4.py                  — 29 Phase 4 tests
+
+# Backend — Edited
+be/auteng/models/payment_models.py                    — Removed IssuedCard, IssuedCardStatus, card LedgerEventType values, COMPLETED status, issued_card FK
+be/auteng/models/__init__.py                          — Removed IssuedCard/IssuedCardStatus exports
+be/auteng/view/payments_views.py                      — Removed issuing handlers, card details, simplified webhook handler
+be/auteng/view/stripe_webhook_views.py                — Removed issuing webhook routing, removed JsonResponse import
+be/auteng/admin/payment_admin.py                      — Removed IssuedCardAdmin, cleaned LedgerEventAdmin
+be/llabs/settings/stripe.py                           — Removed STRIPE_ISSUING_CARDHOLDER_ID
+be/auteng/management/commands/seed_payment_flow.py    — Removed IssuedCard references from simulate-pay
+be/auteng/tests/test_payment_flow.py                  — Removed stripe_issuing_service mocks from 2 webhook tests
+
+# Backend — New
+be/auteng/migrations/0164_back_out_stripe_issuing.py  — Drop IssuedCard table, remove issued_card FK, update choices
+```
+
+### Notes
+
+- This phase is backend-only. Mobile retains `@stripe/stripe-react-native` and Apple Pay flow temporarily — the Stripe → Coinbase On-Ramp swap happens in v6 build phases.
+- The system now functions as a "funding approved" flow: agent requests → owner pays → request marked APPROVED. v6 plugs in wallet transfer where card issuance used to be.
+- `OwnerCharge` and `payment_intent.succeeded` handler are temporary — v6 replaces Stripe PaymentIntent with Coinbase On-Ramp and on-chain transfer detection.
+- Net code removed: ~900 lines (service, views, tests, admin, models). Net code added: ~50 lines (migration).
